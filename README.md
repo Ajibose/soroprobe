@@ -323,6 +323,21 @@ estimate cannot slip under the threshold by luck.
 
 Reads the contract's instance and code entries and reports expiration health.
 
+For a Stellar Asset Contract it also reports the asset behind it: the asset type,
+code and issuer, the contract's admin, and the issuer account's `AUTH_REQUIRED`,
+`AUTH_REVOCABLE` and `CLAWBACK` flags — the facts that decide whether a holder
+can be frozen or clawed back. If the issuer account is not on the ledger the
+report says so instead of guessing at flags. The same data is under `asset` in
+`--json` output and `GET /v1/inspect/{contract}`.
+
+```
+asset
+  type     credit_alphanum4
+  code     USDC
+  issuer   GA5Z…
+  flags    AUTH_REQUIRED, CLAWBACK
+```
+
 | Flag | Description |
 | --- | --- |
 | `--key <spec>` | A contract data key to inspect, in `type:value` form. Repeatable. |
