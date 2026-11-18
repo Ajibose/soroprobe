@@ -518,6 +518,36 @@ $ soroprobe check --standard sep41 C…
 The same standard is available as `standard` in `--file` entries and as the
 `standard` query parameter of `GET /v1/check/{contract}`.
 
+### `soroprobe compat <old> <new>`
+
+Compares two versions of a contract's interface and fails on a breaking change,
+so an upgrade does not silently break the contracts and clients that call it.
+`<old>` is a contract ID (its Wasm is read from the ledger) or a `.wasm` file;
+`<new>` is the new `.wasm` file. Comparing two files needs no network.
+
+```
+$ soroprobe compat C… target/wasm32v1-none/release/token.wasm
+compat C… -> target/wasm32v1-none/release/token.wasm
+
+  BREAKING  fn transfer              argument 3 (amount) type changed from i128 to u64
+  ok        fn mint                  function added: fn mint(to: Address, amount: i128)
+  BREAKING  type Config              field fee type changed from u32 to u64
+
+result FAIL  2 breaking, 1 non-breaking
+```
+
+| Change | Breaking |
+| --- | --- |
+| Function removed, argument count or type changed, return type changed | yes |
+| Struct field removed, retyped or added | yes |
+| Enum or union case removed; enum value or union payload changed | yes |
+| Function added, argument renamed, enum or union case added | no |
+
+User-defined types are compared by structure, not by name, so renaming a type
+without changing its shape is not breaking, and struct fields are compared by
+name rather than position. Exit code 1 when anything is breaking; `--json`
+prints `{"old", "new", "breaking", "changes": [{"breaking", "subject", "detail"}]}`.
+
 ### `soroprobe serve`
 
 Runs the HTTP API. It binds `127.0.0.1:8080` by default; `--addr` overrides

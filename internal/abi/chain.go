@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	protocol "github.com/stellar/go-stellar-sdk/protocols/rpc"
@@ -88,7 +89,7 @@ func (s *ChainSource) Interface(ctx context.Context, _, contractID string) (*Int
 	if codeData.ContractCode == nil {
 		return nil, errors.New("contract code entry does not contain Wasm")
 	}
-	iface, err = decodeContractWasm(codeData.ContractCode.Code)
+	iface, err = ParseWasm(codeData.ContractCode.Code)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +104,9 @@ func (s *ChainSource) Interface(ctx context.Context, _, contractID string) (*Int
 	return iface, nil
 }
 
-func decodeContractWasm(wasm []byte) (*Interface, error) {
+// ParseWasm decodes the interface a contract's Wasm carries in its
+// contractspecv0 custom section: its functions and its user-defined types.
+func ParseWasm(wasm []byte) (*Interface, error) {
 	section, err := customSection(wasm, contractSpecSection)
 	if err != nil {
 		return nil, err
@@ -115,18 +118,20 @@ func decodeContractWasm(wasm []byte) (*Interface, error) {
 		if _, err := xdr.Unmarshal(reader, &entry); err != nil {
 			return nil, fmt.Errorf("decode contract spec: %w", err)
 		}
-		fn, ok := entry.GetFunctionV0()
-		if !ok {
+		if fn, ok := entry.GetFunctionV0(); ok {
+			function := Function{Name: string(fn.Name), Doc: fn.Doc}
+			for _, input := range fn.Inputs {
+				function.Inputs = append(function.Inputs, Param{Name: input.Name, Type: specType(input.Type)})
+			}
+			for _, output := range fn.Outputs {
+				function.Outputs = append(function.Outputs, specType(output))
+			}
+			iface.Functions = append(iface.Functions, function)
 			continue
 		}
-		function := Function{Name: string(fn.Name), Doc: fn.Doc}
-		for _, input := range fn.Inputs {
-			function.Inputs = append(function.Inputs, Param{Name: input.Name, Type: specType(input.Type)})
+		if udt, ok := specUDT(entry); ok {
+			iface.Types = append(iface.Types, udt)
 		}
-		for _, output := range fn.Outputs {
-			function.Outputs = append(function.Outputs, specType(output))
-		}
-		iface.Functions = append(iface.Functions, function)
 	}
 	return iface, nil
 }
@@ -193,11 +198,21 @@ func specType(def xdr.ScSpecTypeDef) Type {
 		key, value := specType(mapType.KeyType), specType(mapType.ValueType)
 		return Type{Kind: "map", Display: "Map<" + key.Display + ", " + value.Display + ">", Key: &key, Value: &value}
 	case xdr.ScSpecTypeScSpecTypeResult:
-		return Type{Kind: "result", Display: "Result"}
+		result := def.MustResult()
+		ok, errType := specType(result.OkType), specType(result.ErrorType)
+		return Type{Kind: "result", Display: "Result<" + ok.Display + ", " + errType.Display + ">", Ok: &ok, Err: &errType}
 	case xdr.ScSpecTypeScSpecTypeTuple:
-		return Type{Kind: "tuple", Display: "Tuple"}
+		tuple := def.MustTuple()
+		elements := make([]Type, len(tuple.ValueTypes))
+		names := make([]string, len(tuple.ValueTypes))
+		for i, element := range tuple.ValueTypes {
+			elements[i] = specType(element)
+			names[i] = elements[i].Display
+		}
+		return Type{Kind: "tuple", Display: "Tuple<" + strings.Join(names, ", ") + ">", Elements: elements}
 	case xdr.ScSpecTypeScSpecTypeBytesN:
-		return Type{Kind: "bytes_n", Display: "BytesN"}
+		n := uint32(def.MustBytesN().N)
+		return Type{Kind: "bytes_n", Display: fmt.Sprintf("BytesN<%d>", n), Length: n}
 	case xdr.ScSpecTypeScSpecTypeUdt:
 		name := def.MustUdt().Name
 		return Type{Kind: "udt", Display: name}

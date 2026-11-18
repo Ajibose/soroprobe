@@ -43,11 +43,12 @@ func (s *standardStep) Run(ctx context.Context, req CheckRequest, inspect *Inspe
 		}}, nil
 	}
 
-	var source abi.Source = s.p.abi
-	if s.p.abi == nil {
-		source = abi.NewChainSource(s.p.client)
+	var iface *abi.Interface
+	if s.p.abi != nil {
+		iface, err = s.p.abi.Interface(ctx, s.p.network, req.ContractID)
+	} else {
+		iface, err = s.p.Interface(ctx, req.ContractID)
 	}
-	iface, err := source.Interface(ctx, s.p.network, req.ContractID)
 	switch {
 	case errors.Is(err, abi.ErrUnknownContract), errors.Is(err, abi.ErrNoWasm):
 		return []Check{{

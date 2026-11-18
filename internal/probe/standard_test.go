@@ -223,3 +223,19 @@ func TestCheckWithoutStandardAddsNoStandardChecks(t *testing.T) {
 		assert.NotContains(t, c.Name, "standard")
 	}
 }
+
+func TestProberInterfaceReadsTheChain(t *testing.T) {
+	t.Parallel()
+
+	// The configured ABI source is ignored: Interface is about what is deployed.
+	p := standardProber(t, stellartest.NewFake(t), &fakeABI{})
+
+	iface, err := p.Interface(context.Background(), stellartest.WasmContract)
+	require.NoError(t, err)
+	fn, err := iface.Lookup("decimals")
+	require.NoError(t, err)
+	assert.Equal(t, "fn decimals() -> u32", fn.Signature())
+
+	_, err = p.Interface(context.Background(), stellartest.SACContract)
+	assert.ErrorIs(t, err, abi.ErrNoWasm)
+}
