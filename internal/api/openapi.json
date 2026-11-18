@@ -255,6 +255,15 @@
             "explode": true
           },
           {
+            "name": "standard",
+            "in": "query",
+            "required": false,
+            "description": "Verify the contract's interface against a standard (sep41)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "expect",
             "in": "query",
             "required": false,

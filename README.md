@@ -491,6 +491,33 @@ functions from the ledger, and guessing a name would produce a failure that
 looks like a broken contract but is really a broken guess. Without `--fn` the
 simulation step is honestly reported as `SKIP`.
 
+#### Verifying a token interface: `--standard`
+
+`check --standard sep41 <contract-id>` verifies that the contract exports the
+[SEP-41](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0041.md)
+token functions with the standard signatures. The interface is read from the
+contract's Wasm on chain (or from SoroVault when `--sorovault-url` is set).
+Argument names do not matter, only types: `Address` and `MuxedAddress` are the
+same kind.
+
+Each deviation — a missing function, a wrong argument count or type, a wrong
+return type — fails its own check named `standard:sep41:<function>`, so a CI log
+says exactly what is wrong. A contract with no deviations gets a single
+`standard:sep41` pass. `decimals`, `name` and `symbol` are also simulated, as
+`standard:sep41:<function>:simulate` checks: `decimals` must return a `u32` of at
+most 38 and `name` and `symbol` a non-empty string. Stellar Asset Contracts are
+implemented by the host and are skipped.
+
+```
+$ soroprobe check --standard sep41 C…
+  PASS  deployed               instance found, executable is wasm
+  FAIL  standard:sep41:burn    the function is not exported
+  PASS  standard:sep41:name:simulate  calling name returned "Token"
+```
+
+The same standard is available as `standard` in `--file` entries and as the
+`standard` query parameter of `GET /v1/check/{contract}`.
+
 ### `soroprobe serve`
 
 Runs the HTTP API. It binds `127.0.0.1:8080` by default; `--addr` overrides
