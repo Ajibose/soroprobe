@@ -14,7 +14,13 @@ import (
 	"github.com/soroworks/soroprobe/internal/stellar"
 )
 
-const contractSpecSection = "contractspecv0"
+const (
+	contractSpecSection = "contractspecv0"
+	contractMetaSection = "contractmetav0"
+)
+
+// errNoSection reports that a Wasm module lacks a custom section.
+var errNoSection = errors.New("wasm module has no such custom section")
 
 // ChainSource reads and decodes ABI specifications from deployed Wasm code.
 type ChainSource struct {
@@ -30,48 +36,92 @@ func NewChainSource(client stellar.Client) *ChainSource {
 
 // Interface retrieves and decodes the interface stored in the contract's Wasm.
 func (s *ChainSource) Interface(ctx context.Context, _, contractID string) (*Interface, error) {
-	contract, err := stellar.ParseContractID(contractID)
+	hash, err := s.wasmHash(ctx, contractID)
 	if err != nil {
 		return nil, err
-	}
-	instanceKey, err := stellar.EncodeKey(stellar.InstanceKey(contract))
-	if err != nil {
-		return nil, err
-	}
-	instanceResponse, err := s.client.GetLedgerEntries(ctx, protocol.GetLedgerEntriesRequest{Keys: []string{instanceKey}})
-	if err != nil {
-		return nil, err
-	}
-	if len(instanceResponse.Entries) == 0 {
-		return nil, ErrUnknownContract
-	}
-	instanceData, err := stellar.DecodeEntryData(instanceResponse.Entries[0].DataXDR)
-	if err != nil {
-		return nil, fmt.Errorf("decode contract instance: %w", err)
-	}
-	if instanceData.ContractData == nil {
-		return nil, errors.New("contract instance entry is not contract data")
-	}
-	instance, ok := instanceData.ContractData.Val.GetInstance()
-	if !ok {
-		return nil, errors.New("contract instance entry does not hold an instance")
-	}
-	if instance.Executable.Type == xdr.ContractExecutableTypeContractExecutableStellarAsset {
-		return nil, ErrNoWasm
-	}
-	if instance.Executable.Type != xdr.ContractExecutableTypeContractExecutableWasm || instance.Executable.WasmHash == nil {
-		return nil, fmt.Errorf("contract executable %s has no Wasm hash", instance.Executable.Type)
 	}
 
-	hash := fmt.Sprintf("%x", instance.Executable.WasmHash[:])
+	key := fmt.Sprintf("%x", hash[:])
 	s.mu.RLock()
-	iface := s.cache[hash]
+	iface := s.cache[key]
 	s.mu.RUnlock()
 	if iface != nil {
 		return iface, nil
 	}
 
-	codeKey, err := stellar.EncodeKey(stellar.CodeKey(*instance.Executable.WasmHash))
+	wasm, err := s.fetchCode(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	iface, err = ParseWasm(wasm)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if cached := s.cache[key]; cached != nil {
+		iface = cached
+	} else {
+		s.cache[key] = iface
+	}
+	s.mu.Unlock()
+	return iface, nil
+}
+
+// Code returns the Wasm a deployed contract is running, and its hash in hex.
+// It returns ErrNoWasm for a Stellar Asset Contract, which has none.
+func (s *ChainSource) Code(ctx context.Context, contractID string) ([]byte, string, error) {
+	hash, err := s.wasmHash(ctx, contractID)
+	if err != nil {
+		return nil, "", err
+	}
+	wasm, err := s.fetchCode(ctx, hash)
+	if err != nil {
+		return nil, "", err
+	}
+	return wasm, fmt.Sprintf("%x", hash[:]), nil
+}
+
+// wasmHash reads the contract's instance and returns the hash of its Wasm.
+func (s *ChainSource) wasmHash(ctx context.Context, contractID string) (xdr.Hash, error) {
+	contract, err := stellar.ParseContractID(contractID)
+	if err != nil {
+		return xdr.Hash{}, err
+	}
+	instanceKey, err := stellar.EncodeKey(stellar.InstanceKey(contract))
+	if err != nil {
+		return xdr.Hash{}, err
+	}
+	instanceResponse, err := s.client.GetLedgerEntries(ctx, protocol.GetLedgerEntriesRequest{Keys: []string{instanceKey}})
+	if err != nil {
+		return xdr.Hash{}, err
+	}
+	if len(instanceResponse.Entries) == 0 {
+		return xdr.Hash{}, ErrUnknownContract
+	}
+	instanceData, err := stellar.DecodeEntryData(instanceResponse.Entries[0].DataXDR)
+	if err != nil {
+		return xdr.Hash{}, fmt.Errorf("decode contract instance: %w", err)
+	}
+	if instanceData.ContractData == nil {
+		return xdr.Hash{}, errors.New("contract instance entry is not contract data")
+	}
+	instance, ok := instanceData.ContractData.Val.GetInstance()
+	if !ok {
+		return xdr.Hash{}, errors.New("contract instance entry does not hold an instance")
+	}
+	if instance.Executable.Type == xdr.ContractExecutableTypeContractExecutableStellarAsset {
+		return xdr.Hash{}, ErrNoWasm
+	}
+	if instance.Executable.Type != xdr.ContractExecutableTypeContractExecutableWasm || instance.Executable.WasmHash == nil {
+		return xdr.Hash{}, fmt.Errorf("contract executable %s has no Wasm hash", instance.Executable.Type)
+	}
+	return *instance.Executable.WasmHash, nil
+}
+
+// fetchCode reads the Wasm code entry with the given hash.
+func (s *ChainSource) fetchCode(ctx context.Context, hash xdr.Hash) ([]byte, error) {
+	codeKey, err := stellar.EncodeKey(stellar.CodeKey(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +130,7 @@ func (s *ChainSource) Interface(ctx context.Context, _, contractID string) (*Int
 		return nil, err
 	}
 	if len(codeResponse.Entries) == 0 {
-		return nil, fmt.Errorf("contract Wasm code %s was not found on ledger", hash)
+		return nil, fmt.Errorf("contract Wasm code %x was not found on ledger", hash[:])
 	}
 	codeData, err := stellar.DecodeEntryData(codeResponse.Entries[0].DataXDR)
 	if err != nil {
@@ -89,19 +139,7 @@ func (s *ChainSource) Interface(ctx context.Context, _, contractID string) (*Int
 	if codeData.ContractCode == nil {
 		return nil, errors.New("contract code entry does not contain Wasm")
 	}
-	iface, err = ParseWasm(codeData.ContractCode.Code)
-	if err != nil {
-		return nil, err
-	}
-
-	s.mu.Lock()
-	if cached := s.cache[hash]; cached != nil {
-		iface = cached
-	} else {
-		s.cache[hash] = iface
-	}
-	s.mu.Unlock()
-	return iface, nil
+	return codeData.ContractCode.Code, nil
 }
 
 // ParseWasm decodes the interface a contract's Wasm carries in its
@@ -163,7 +201,7 @@ func customSection(wasm []byte, wanted string) ([]byte, error) {
 		}
 		position = sectionEnd
 	}
-	return nil, fmt.Errorf("wasm module has no %q custom section", wanted)
+	return nil, fmt.Errorf("%w: %q", errNoSection, wanted)
 }
 
 func readULEB(data []byte, position *int) (uint32, error) {
@@ -234,4 +272,31 @@ func specType(def xdr.ScSpecTypeDef) Type {
 		name = def.Type.String()
 	}
 	return Type{Kind: name, Display: name}
+}
+
+// ParseMeta decodes the key/value metadata a contract's Wasm carries in its
+// contractmetav0 custom section: the Rust version it was built with, and,
+// when the build recorded them, its source repository, commit and build
+// image. A module with no such section has no metadata, which is not an error.
+// A key that appears more than once keeps its last value.
+func ParseMeta(wasm []byte) (map[string]string, error) {
+	section, err := customSection(wasm, contractMetaSection)
+	if errors.Is(err, errNoSection) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	reader := bytes.NewReader(section)
+	meta := map[string]string{}
+	for reader.Len() > 0 {
+		var entry xdr.ScMetaEntry
+		if _, err := xdr.Unmarshal(reader, &entry); err != nil {
+			return nil, fmt.Errorf("decode contract metadata: %w", err)
+		}
+		if v0, ok := entry.GetV0(); ok {
+			meta[v0.Key] = v0.Val
+		}
+	}
+	return meta, nil
 }

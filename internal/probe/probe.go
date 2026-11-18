@@ -169,3 +169,8 @@ type Event struct {
 func (p *Prober) Interface(ctx context.Context, contractID string) (*abi.Interface, error) {
 	return p.chain.Interface(ctx, p.network, contractID)
 }
+
+// Code returns the Wasm a deployed contract is running and its hash in hex.
+func (p *Prober) Code(ctx context.Context, contractID string) ([]byte, string, error) {
+	return p.chain.Code(ctx, contractID)
+}

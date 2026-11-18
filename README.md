@@ -548,6 +548,50 @@ without changing its shape is not breaking, and struct fields are compared by
 name rather than position. Exit code 1 when anything is breaking; `--json`
 prints `{"old", "new", "breaking", "changes": [{"breaking", "subject", "detail"}]}`.
 
+### `soroprobe verify <contract-id>`
+
+Rebuilds a contract from source and checks that the Wasm it produces is the Wasm
+the contract is running — the on-chain half of "is this deployment really that
+repository at that commit?".
+
+| Flag | Description |
+| --- | --- |
+| `--source <repo>` | Git repository to build. Defaults to the contract's `source_repo` metadata. |
+| `--rev <rev>` | Commit, tag or branch. Defaults to the contract's `source_rev`, else `commit_hash`, metadata. |
+| `--image <image>` | Container image to build in. Defaults to the contract's `bldimg` metadata. |
+
+There is **no default image**: a rebuild is only as trustworthy as its
+toolchain, so the image comes from the contract's own metadata or from you.
+Prefer one pinned by digest (`name@sha256:…`); the report says whether it was,
+because a tag can move and a later rebuild may use a different compiler.
+
+```
+$ soroprobe verify C… --image ghcr.io/example/builder@sha256:0123…
+contract C…
+deployed 8608bb30…
+
+  source     https://github.com/example/token
+  rev        abc123
+  image      ghcr.io/example/builder@sha256:0123…  pinned by digest
+  rustc      rustc 1.91.0
+  stellar    stellar 25.0.0
+
+built artifacts
+  MATCH     8608bb30…  target/wasm32v1-none/release/token.wasm
+
+result VERIFIED  the deployed Wasm was reproduced from source
+```
+
+It clones the repository and checks out `--rev`, then runs `rustc --version`,
+`stellar --version` and `stellar contract build` in the image with `docker`, and
+hashes every `target/**/release/*.wasm`. Exit code 0 when at least one artifact
+matches the deployed hash, 1 when none does; `--json` prints the report.
+Needs `git` and `docker` on the `PATH`. This is the one command that runs other
+programs, and the build executes whatever the image and repository contain, so
+only verify sources and images you trust. Values starting with `-` are rejected
+for `--source`, `--rev` and `--image`, and metadata read from the contract is
+held to the same rule.
+
 ### `soroprobe serve`
 
 Runs the HTTP API. It binds `127.0.0.1:8080` by default; `--addr` overrides
