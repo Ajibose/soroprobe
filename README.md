@@ -518,6 +518,51 @@ $ soroprobe check --standard sep41 C…
 The same standard is available as `standard` in `--file` entries and as the
 `standard` query parameter of `GET /v1/check/{contract}`.
 
+#### Admin posture: `--admin-fn` and `--admin-key`
+
+Many contracts are controlled by one admin address, and what that address *is*
+is the most important fact about the contract's trust model. `--admin-fn admin`
+calls a zero-argument function that returns the admin; `--admin-key sym:Admin`
+reads it from instance storage (or, failing that, a persistent data entry)
+instead. The check named `admin` then reports:
+
+- for an **account**: its master weight, thresholds and signers. A single signer
+  with master weight is a `WARN`, prefixed `MAINNET:` on the public network;
+- for a **contract**: that it is a contract, and its Wasm hash;
+- an admin that cannot be resolved is a `FAIL`.
+
+#### Upgradeability: `--upgradeability`
+
+`check --upgradeability` answers "can this contract be changed under me?" in
+three checks, all **best effort**: the interface is searched for upgrade-like
+functions by name (`upgrade`, `update_current_contract_wasm`, `set_wasm`, anything
+containing `upgrade`), so a differently named upgrade function is not seen.
+
+- `upgradeability:interface` warns when such a function is exported.
+- `upgradeability:admin` names the admin that would have to call it: the one from
+  `--admin-fn`/`--admin-key`, else instance storage `Admin` or a zero-argument
+  `admin`, `get_admin` or `owner` function. It warns when an upgrade function is
+  exposed and no admin can be found.
+- `upgradeability:code_modified` gives the ledger the code entry was last written.
+
+Stellar Asset Contracts are host-implemented and skipped.
+
+#### Can the rent payer afford it: `--rent-payer`
+
+A TTL warning is only actionable if someone can pay to extend the entry.
+`check --rent-payer G… [--extend-ledgers N]` prices extending every entry that is
+running low (warning or critical) by `N` ledgers (default 518400, about 30 days)
+with the same simulation `inspect --estimate-extend` uses, and compares the total
+with the payer's **spendable** balance: its balance minus the minimum balance
+(`2 + subentries + sponsoring - sponsored` base reserves of 0.5 XLM) and selling
+liabilities. It is a `FAIL` when the balance falls short and a `WARN` when it
+would cover the cost with less than twice to spare. The sum is printed so it can
+be checked. Expired entries need a restore first and are not priced.
+
+```
+  WARN  rent_payer  affords the extension with less than twice the cost to spare: extending by 518400 ledgers costs about 0.0213 XLM (instance 0.0213 XLM); payer G… has 1.5213 XLM, minus 1 XLM reserve (2 base reserves of 0.5 XLM) and selling liabilities, leaving 0.5213 XLM spendable
+```
+
 ### `soroprobe compat <old> <new>`
 
 Compares two versions of a contract's interface and fails on a breaking change,
@@ -547,6 +592,27 @@ User-defined types are compared by structure, not by name, so renaming a type
 without changing its shape is not breaking, and struct fields are compared by
 name rather than position. Exit code 1 when anything is breaking; `--json`
 prints `{"old", "new", "breaking", "changes": [{"breaking", "subject", "detail"}]}`.
+
+### `soroprobe balance <token> <address>...`
+
+Reads a token's balances, formatted with the token's decimals and symbol, instead
+of simulating `balance` by hand and dividing by 10^decimals. `<token>` is a
+SEP-41 token or a Stellar Asset Contract; each address is an account (`G...`) or
+a contract (`C...`). `--file holders.txt` adds more addresses, one per line
+(`-` for stdin; blank lines and `#` comments are ignored).
+
+```
+$ soroprobe balance C…TOKEN G…ALICE G…BOB
+token C…TOKEN  USDC, 7 decimals
+
+  G…ALICE 12.5 USDC
+  G…BOB 0 USDC
+```
+
+`--json` prints `{"token", "symbol", "decimals", "balances": [{"address", "raw",
+"balance"}]}`; `raw` is the integer the contract returned, as a string. An
+address that cannot be read is reported with an `error` and the others still
+print; the exit code is then 1. Nothing is submitted and no key is needed.
 
 ### `soroprobe verify <contract-id>`
 
